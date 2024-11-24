@@ -221,7 +221,7 @@ impl fmt::Display for Statement {
 }
 
 #[derive(Debug)]
-pub(crate) struct Disassembler {
+pub struct Disassembler {
     instructions_bin: Cursor<Vec<u8>>,
 }
 
@@ -233,10 +233,11 @@ impl Disassembler {
     }
 
     pub fn decode(&mut self) -> Result<String> {
-        let mut decoded = String::from_str("bits 16\n")?;
+        let mut decoded = String::from_str("bits 16\n\n")?;
 
         while let Some(statement) = self.decode_next()? {
             decoded.push_str(&statement.to_string());
+            decoded.push('\n');
         }
 
         Ok(decoded)
@@ -244,7 +245,11 @@ impl Disassembler {
 
     fn decode_next(&mut self) -> Result<Option<Statement>> {
         let mut next: [u8; 2] = [0; 2];
-        self.instructions_bin.read_exact(&mut next)?;
+        let read_len = self.instructions_bin.read(&mut next)?;
+
+        if read_len == 0 {
+            return Ok(None);
+        }
 
         let opcode = Opcode::try_from(next[0])?;
         let statement = match opcode {
