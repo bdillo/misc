@@ -1,8 +1,10 @@
 use std::{
-    fmt::{self, write},
+    fmt,
     io::{Cursor, Read},
     str::FromStr,
 };
+
+use log::{debug, info};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type DestinationIsReg = bool;
@@ -10,7 +12,7 @@ type IsWord = bool;
 
 #[derive(Debug)]
 enum DissassemblerError {
-    InvalidOpcode,
+    InvalidOpcode(u8),
     InvalidMode,
     InvalidRegister,
     FailedToDecode,
@@ -18,7 +20,15 @@ enum DissassemblerError {
 
 impl fmt::Display for DissassemblerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DissassemblerError")
+        let mut error_str = match self {
+            Self::InvalidOpcode(op) => format!("Invalid Opcode 0b{:08b}", op),
+            Self::InvalidMode => "Invalid mode".to_owned(),
+            Self::InvalidRegister => "Invalid Register".to_owned(),
+            Self::FailedToDecode => "Failed to decode".to_owned(),
+        };
+        error_str.push('\n');
+
+        write!(f, "{}", error_str)
     }
 }
 
@@ -27,6 +37,7 @@ impl std::error::Error for DissassemblerError {}
 #[derive(Debug, PartialEq, Eq)]
 enum Opcode {
     MovRegisterMemoryToFromRegister(DestinationIsReg, IsWord),
+    MovImmediateToRegister(IsWord, Register),
 }
 
 impl TryFrom<u8> for Opcode {
@@ -34,12 +45,19 @@ impl TryFrom<u8> for Opcode {
 
     fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
         match value {
+            // register/memory to/from register
             val if value & 0b10001000 == 0b10001000 => {
                 let direction = ((val & 0b10) != 0) as DestinationIsReg;
                 let is_word = ((val & 0b1) != 0) as IsWord;
-                Ok(Opcode::MovRegisterMemoryToFromRegister(direction, is_word))
+                Ok(Self::MovRegisterMemoryToFromRegister(direction, is_word))
             }
-            _ => Err(DissassemblerError::InvalidOpcode),
+            // immediate to register
+            val if value & 0b10110000 == 0b10110000 => {
+                let is_word = ((val & 0b1000) != 0) as IsWord;
+                let reg = Register::try_from_with_w(val, is_word)?;
+                Ok(Self::MovImmediateToRegister(is_word, reg))
+            }
+            _ => Err(DissassemblerError::InvalidOpcode(value)),
         }
     }
 }
@@ -51,12 +69,13 @@ impl fmt::Display for Opcode {
             "{}",
             match self {
                 Self::MovRegisterMemoryToFromRegister(_, _) => "mov",
+                Self::MovImmediateToRegister(_, _) => "mov",
             }
         )
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Register {
     AL,
     CL,
@@ -202,21 +221,30 @@ impl TryFrom<u8> for Mode {
     }
 }
 
+impl Mode {
+    fn get_displacement_len(&self) -> usize {
+        match self {
+            Self::MemoryNoDisplacement => 0,
+            Self::Memory8BitDisplacement => 1,
+            Self::Memory16BitDisplacement => 1,
+            // TODO: there is some caveat here
+            Self::Register => 0,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Statement {
     opcode: Opcode,
-    mode: Mode,
-    destination: Register,
-    source: Register,
+    destination: String,
+    source: String,
 }
 
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let opcode = self.opcode.to_string();
-        let dest = self.destination.to_string();
-        let source = self.source.to_string();
 
-        write!(f, "{} {}, {}", opcode, dest, source)
+        write!(f, "{} {}, {}", opcode, self.destination, self.source)
     }
 }
 
@@ -233,52 +261,87 @@ impl Disassembler {
     }
 
     pub fn decode(&mut self) -> Result<String> {
-        let mut decoded = String::from_str("bits 16\n\n")?;
+        let mut decoded = String::from_str("bits 16\n")?;
 
-        while let Some(statement) = self.decode_next()? {
-            decoded.push_str(&statement.to_string());
+        while let Some(statement) = self.decode_next_op()? {
             decoded.push('\n');
+
+            let statement_str = &statement.to_string();
+            info!("{}", &statement_str);
+            decoded.push_str(statement_str);
         }
 
         Ok(decoded)
     }
 
-    fn decode_next(&mut self) -> Result<Option<Statement>> {
-        let mut next: [u8; 2] = [0; 2];
+    fn read_next(&mut self) -> Result<Option<u8>> {
+        let mut next = [0u8; 1];
         let read_len = self.instructions_bin.read(&mut next)?;
 
         if read_len == 0 {
             return Ok(None);
         }
 
-        let opcode = Opcode::try_from(next[0])?;
-        let statement = match opcode {
-            Opcode::MovRegisterMemoryToFromRegister(destination_is_reg, is_word) => {
-                let val = next[1];
-                let rm = Register::try_from_with_w(val, is_word)?;
-                let mode = Mode::try_from(val)?;
+        debug!("read {:08b}", next[0]);
 
-                let val = val >> 3;
-                let reg = Register::try_from_with_w(val, is_word)?;
-
-                let (destination, source) = if destination_is_reg {
-                    (reg, rm)
-                } else {
-                    (rm, reg)
-                };
-
-                Statement {
-                    opcode,
-                    mode,
-                    destination,
-                    source,
-                }
-            }
-            _ => return Err(Box::new(DissassemblerError::FailedToDecode)),
-        };
-
-        Ok(Some(statement))
+        Ok(Some(next[0]))
     }
+
+    fn decode_next_op(&mut self) -> Result<Option<Statement>> {
+        let next = self.read_next()?;
+
+        match next {
+            Some(next) => {
+                let opcode = Opcode::try_from(next)?;
+
+                let statement = match opcode {
+                    // TODO: handle disp-lo,high
+                    Opcode::MovRegisterMemoryToFromRegister(destination_is_reg, is_word) => {
+                        let next_val = self.read_next()?.unwrap();
+
+                        let rm = Register::try_from_with_w(next_val, is_word)?;
+                        let mode = Mode::try_from(next_val)?;
+
+                        let next_val = next_val >> 3;
+                        let reg = Register::try_from_with_w(next_val, is_word)?;
+
+                        let (destination, source) = if destination_is_reg {
+                            (reg, rm)
+                        } else {
+                            (rm, reg)
+                        };
+
+                        Statement {
+                            opcode,
+                            destination: destination.to_string(),
+                            source: source.to_string(),
+                        }
+                    }
+                    Opcode::MovImmediateToRegister(is_word, reg) => {
+                        let data = if is_word {
+                            (self.read_next()?.unwrap() + self.read_next()?.unwrap()) as u16
+                        } else {
+                            self.read_next()?.unwrap() as u16
+                        };
+
+                        Statement {
+                            opcode,
+                            destination: reg.clone().to_string(),
+                            source: data.to_string(),
+                        }
+                    } // _ => return Err(Box::new(DissassemblerError::FailedToDecode)),
+                };
+                Ok(Some(statement))
+            }
+            None => Ok(None),
+        }
+    }
+
+    // fn decode_statement(&mut self, opcode: &Opcode) -> Result<Statement> {
+    //     match opcode {
+    //         _ => return Err(Box::new(DissassemblerError::FailedToDecode)),
+    //     }
+    // }
 }
 
 #[cfg(test)]
@@ -289,13 +352,12 @@ mod test {
     fn test_basic_mov() -> Result<()> {
         let instructions: [u8; 2] = [0b10001001, 0b11011001];
         let mut d = Disassembler::new(&instructions);
-        let statement = d.decode_next()?.unwrap();
+        let statement = d.decode_next_op()?.unwrap();
 
         let expected = Statement {
             opcode: Opcode::MovRegisterMemoryToFromRegister(false, true),
-            mode: Mode::Register,
-            destination: Register::CX,
-            source: Register::BX,
+            destination: Register::CX.to_string(),
+            source: Register::BX.to_string(),
         };
 
         assert_eq!(expected, statement);
