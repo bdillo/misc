@@ -46,15 +46,16 @@ impl TryFrom<u8> for Opcode {
     fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
         match value {
             // register/memory to/from register
-            val if value & 0b10001000 == 0b10001000 => {
-                let direction = ((val & 0b10) != 0) as DestinationIsReg;
-                let is_word = ((val & 0b1) != 0) as IsWord;
+            value if (value & 0b11111100) == 0b10001000 => {
+                // why
+                let direction = ((value & 0b10) != 0) as DestinationIsReg;
+                let is_word = ((value & 0b1) != 0) as IsWord;
                 Ok(Self::MovRegisterMemoryToFromRegister(direction, is_word))
             }
             // immediate to register
-            val if value & 0b10110000 == 0b10110000 => {
-                let is_word = ((val & 0b1000) != 0) as IsWord;
-                let reg = Register::try_from_with_w(val, is_word)?;
+            value if (value & 0b11110000) == 0b10110000 => {
+                let is_word = ((value & 0b1000) != 0) as IsWord;
+                let reg = Register::try_from_with_w(value, is_word)?;
                 Ok(Self::MovImmediateToRegister(is_word, reg))
             }
             _ => Err(DissassemblerError::InvalidOpcode(value)),
@@ -319,14 +320,17 @@ impl Disassembler {
                     }
                     Opcode::MovImmediateToRegister(is_word, reg) => {
                         let data = if is_word {
-                            (self.read_next()?.unwrap() + self.read_next()?.unwrap()) as u16
+                            // TODO: this doesn't seem right
+                            let low = self.read_next()?.unwrap() as u16;
+                            let high = (self.read_next()?.unwrap() as u16) << 8;
+                            low + high
                         } else {
                             self.read_next()?.unwrap() as u16
                         };
 
                         Statement {
                             opcode,
-                            destination: reg.clone().to_string(),
+                            destination: reg.to_string(),
                             source: data.to_string(),
                         }
                     } // _ => return Err(Box::new(DissassemblerError::FailedToDecode)),
