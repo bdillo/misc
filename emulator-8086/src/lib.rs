@@ -301,6 +301,24 @@ impl fmt::Display for EffectiveAddress {
     }
 }
 
+impl EffectiveAddress {
+    fn to_string_with_displacement(&self, disp: u16) -> String {
+        let mut s = String::new();
+        match self {
+            Self::DirectAddress => todo!(),
+            Self::SingleReg(reg, _) => s.push_str(&format!("[{}]", reg)),
+            Self::DoubleReg(first, second, _) => {
+                s.push_str(&format!("[{} + {}", first, second));
+                if disp > 0 {
+                    s.push_str(&format!(" + {}", disp));
+                }
+                s.push(']');
+            }
+        };
+        s
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Statement {
     opcode: Opcode,
@@ -365,22 +383,30 @@ impl Disassembler {
                 let statement = match opcode {
                     // TODO: handle disp-lo,high
                     Opcode::MovRegisterMemoryToFromRegister(destination_is_reg, is_word) => {
-                        let next_val = self.read_next()?.unwrap();
+                        let next = self.read_next()?.unwrap();
 
-                        let mode = Mode::try_from(next_val)?;
+                        let mode = Mode::try_from(next)?;
 
-                        let shifted_reg = next_val >> 3;
+                        let shifted_reg = next >> 3;
                         let reg = Register::try_from_with_w(shifted_reg, is_word)?;
                         let mut src = reg.to_string();
 
                         let mut dest = if let Mode::Memory(disp) = mode {
                             // effective address calculation
-                            let effective_address =
-                                EffectiveAddress::from_with_mode(next_val, mode)?;
-                            effective_address.to_string()
+                            let disp_val: u16 = match disp {
+                                Displacement::None => 0,
+                                Displacement::Byte => self.read_next()?.unwrap() as u16,
+                                Displacement::Word => {
+                                    let low = self.read_next()?.unwrap() as u16;
+                                    let high = (self.read_next()?.unwrap() as u16) << 8;
+                                    low + high
+                                }
+                            };
+                            let effective_address = EffectiveAddress::from_with_mode(next, mode)?;
+                            effective_address.to_string_with_displacement(disp_val)
                         } else {
                             // otherwise rm field is a register
-                            let rm_reg = Register::try_from_with_w(next_val, is_word)?;
+                            let rm_reg = Register::try_from_with_w(next, is_word)?;
                             rm_reg.to_string()
                         };
 
