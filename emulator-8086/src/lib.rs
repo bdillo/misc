@@ -15,15 +15,20 @@ enum DissassemblerError {
     InvalidOpcode(u8),
     InvalidMode,
     InvalidRegister,
+    InvalidEffectiveAddress(u8),
     FailedToDecode,
 }
 
 impl fmt::Display for DissassemblerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: better errors
         let mut error_str = match self {
             Self::InvalidOpcode(op) => format!("Invalid Opcode 0b{:08b}", op),
             Self::InvalidMode => "Invalid mode".to_owned(),
             Self::InvalidRegister => "Invalid Register".to_owned(),
+            Self::InvalidEffectiveAddress(addr) => {
+                format!("Invalid effective address 0b{:08b}", addr)
+            }
             Self::FailedToDecode => "Failed to decode".to_owned(),
         };
         error_str.push('\n');
@@ -195,11 +200,32 @@ impl Register {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Displacement {
+    /// No displacement
+    None,
+    /// 8 bit displacement
+    Byte,
+    /// 16 bit displacement
+    Word,
+}
+
+impl Displacement {
+    fn get_len(&self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Byte => 1,
+            Self::Word => 2,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
-    MemoryNoDisplacement,
-    Memory8BitDisplacement,
-    Memory16BitDisplacement,
+    Memory(Displacement),
+    // MemoryNoDisplacement,
+    // Memory8BitDisplacement,
+    // Memory16BitDisplacement,
     Register,
 }
 
@@ -211,10 +237,10 @@ impl TryFrom<u8> for Mode {
         let masked = masked >> 6;
 
         let mode = match masked {
-            0b00 => Mode::MemoryNoDisplacement,
-            0b01 => Mode::Memory8BitDisplacement,
-            0b10 => Mode::Memory16BitDisplacement,
-            0b11 => Mode::Register,
+            0b00 => Self::Memory(Displacement::None),
+            0b01 => Self::Memory(Displacement::Byte),
+            0b10 => Self::Memory(Displacement::Word),
+            0b11 => Self::Register,
             _ => return Err(DissassemblerError::InvalidMode),
         };
 
@@ -223,14 +249,55 @@ impl TryFrom<u8> for Mode {
 }
 
 impl Mode {
-    fn get_displacement_len(&self) -> usize {
-        match self {
-            Self::MemoryNoDisplacement => 0,
-            Self::Memory8BitDisplacement => 1,
-            Self::Memory16BitDisplacement => 1,
-            // TODO: there is some caveat here
-            Self::Register => 0,
-        }
+    fn is_memory_mode(&self) -> bool {
+        !matches!(self, Self::Register)
+    }
+}
+
+#[derive(Debug)]
+enum EffectiveAddress {
+    DirectAddress,
+    SingleReg(Register, Displacement),
+    DoubleReg(Register, Register, Displacement),
+}
+
+impl EffectiveAddress {
+    fn from_with_mode(value: u8, mode: Mode) -> Result<Self> {
+        let displacement = match mode {
+            Mode::Memory(displacement) => displacement,
+            // TODO: is this right? not sure if we would ever have register mode here
+            Mode::Register => Displacement::None,
+        };
+
+        let masked = value & 0b00000111;
+        Ok(match masked {
+            0b000 => Self::DoubleReg(Register::BX, Register::SI, displacement),
+            0b001 => Self::DoubleReg(Register::BX, Register::DI, displacement),
+            0b010 => Self::DoubleReg(Register::BP, Register::SI, displacement),
+            0b011 => Self::DoubleReg(Register::BP, Register::DI, displacement),
+            0b100 => Self::SingleReg(Register::SI, displacement),
+            0b101 => Self::SingleReg(Register::DI, displacement),
+            0b110 => {
+                if displacement == Displacement::None {
+                    Self::DirectAddress
+                } else {
+                    Self::SingleReg(Register::BP, displacement)
+                }
+            }
+            0b111 => Self::SingleReg(Register::BX, displacement),
+            _ => return Err(Box::new(DissassemblerError::InvalidEffectiveAddress(value))),
+        })
+    }
+}
+
+impl fmt::Display for EffectiveAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::DirectAddress => todo!(),
+            Self::SingleReg(reg, _) => format!("[{}]", reg),
+            Self::DoubleReg(first, second, _) => format!("[{} + {}]", first, second),
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -300,27 +367,35 @@ impl Disassembler {
                     Opcode::MovRegisterMemoryToFromRegister(destination_is_reg, is_word) => {
                         let next_val = self.read_next()?.unwrap();
 
-                        let rm = Register::try_from_with_w(next_val, is_word)?;
                         let mode = Mode::try_from(next_val)?;
 
-                        let next_val = next_val >> 3;
-                        let reg = Register::try_from_with_w(next_val, is_word)?;
+                        let shifted_reg = next_val >> 3;
+                        let reg = Register::try_from_with_w(shifted_reg, is_word)?;
+                        let mut src = reg.to_string();
 
-                        let (destination, source) = if destination_is_reg {
-                            (reg, rm)
+                        let mut dest = if let Mode::Memory(disp) = mode {
+                            // effective address calculation
+                            let effective_address =
+                                EffectiveAddress::from_with_mode(next_val, mode)?;
+                            effective_address.to_string()
                         } else {
-                            (rm, reg)
+                            // otherwise rm field is a register
+                            let rm_reg = Register::try_from_with_w(next_val, is_word)?;
+                            rm_reg.to_string()
                         };
+
+                        if destination_is_reg {
+                            std::mem::swap(&mut src, &mut dest)
+                        }
 
                         Statement {
                             opcode,
-                            destination: destination.to_string(),
-                            source: source.to_string(),
+                            destination: dest,
+                            source: src,
                         }
                     }
                     Opcode::MovImmediateToRegister(is_word, reg) => {
                         let data = if is_word {
-                            // TODO: this doesn't seem right
                             let low = self.read_next()?.unwrap() as u16;
                             let high = (self.read_next()?.unwrap() as u16) << 8;
                             low + high
