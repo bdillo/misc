@@ -16,7 +16,7 @@ enum DissassemblerError {
     InvalidMode,
     InvalidRegister,
     InvalidEffectiveAddress(u8),
-    FailedToDecode,
+    // FailedToDecode,
 }
 
 impl fmt::Display for DissassemblerError {
@@ -28,8 +28,7 @@ impl fmt::Display for DissassemblerError {
             Self::InvalidRegister => "Invalid Register".to_owned(),
             Self::InvalidEffectiveAddress(addr) => {
                 format!("Invalid effective address 0b{:08b}", addr)
-            }
-            Self::FailedToDecode => "Failed to decode".to_owned(),
+            } // Self::FailedToDecode => "Failed to decode".to_owned(),
         };
         error_str.push('\n');
 
@@ -50,14 +49,14 @@ impl TryFrom<u8> for Opcode {
 
     fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
         match value {
-            // register/memory to/from register
+            // mov register/memory to/from register
             value if (value & 0b11111100) == 0b10001000 => {
                 // why
                 let direction = ((value & 0b10) != 0) as DestinationIsReg;
                 let is_word = ((value & 0b1) != 0) as IsWord;
                 Ok(Self::MovRegisterMemoryToFromRegister(direction, is_word))
             }
-            // immediate to register
+            // mov immediate to register
             value if (value & 0b11110000) == 0b10110000 => {
                 let is_word = ((value & 0b1000) != 0) as IsWord;
                 let reg = Register::try_from_with_w(value, is_word)?;
@@ -210,22 +209,9 @@ enum Displacement {
     Word,
 }
 
-impl Displacement {
-    fn get_len(&self) -> usize {
-        match self {
-            Self::None => 0,
-            Self::Byte => 1,
-            Self::Word => 2,
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
     Memory(Displacement),
-    // MemoryNoDisplacement,
-    // Memory8BitDisplacement,
-    // Memory16BitDisplacement,
     Register,
 }
 
@@ -248,17 +234,11 @@ impl TryFrom<u8> for Mode {
     }
 }
 
-impl Mode {
-    fn is_memory_mode(&self) -> bool {
-        !matches!(self, Self::Register)
-    }
-}
-
 #[derive(Debug)]
 enum EffectiveAddress {
     DirectAddress,
-    SingleReg(Register, Displacement),
-    DoubleReg(Register, Register, Displacement),
+    SingleReg(Register),
+    DoubleReg(Register, Register),
 }
 
 impl EffectiveAddress {
@@ -271,20 +251,20 @@ impl EffectiveAddress {
 
         let masked = value & 0b00000111;
         Ok(match masked {
-            0b000 => Self::DoubleReg(Register::BX, Register::SI, displacement),
-            0b001 => Self::DoubleReg(Register::BX, Register::DI, displacement),
-            0b010 => Self::DoubleReg(Register::BP, Register::SI, displacement),
-            0b011 => Self::DoubleReg(Register::BP, Register::DI, displacement),
-            0b100 => Self::SingleReg(Register::SI, displacement),
-            0b101 => Self::SingleReg(Register::DI, displacement),
+            0b000 => Self::DoubleReg(Register::BX, Register::SI),
+            0b001 => Self::DoubleReg(Register::BX, Register::DI),
+            0b010 => Self::DoubleReg(Register::BP, Register::SI),
+            0b011 => Self::DoubleReg(Register::BP, Register::DI),
+            0b100 => Self::SingleReg(Register::SI),
+            0b101 => Self::SingleReg(Register::DI),
             0b110 => {
                 if displacement == Displacement::None {
                     Self::DirectAddress
                 } else {
-                    Self::SingleReg(Register::BP, displacement)
+                    Self::SingleReg(Register::BP)
                 }
             }
-            0b111 => Self::SingleReg(Register::BX, displacement),
+            0b111 => Self::SingleReg(Register::BX),
             _ => return Err(Box::new(DissassemblerError::InvalidEffectiveAddress(value))),
         })
     }
@@ -294,8 +274,8 @@ impl fmt::Display for EffectiveAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::DirectAddress => todo!(),
-            Self::SingleReg(reg, _) => format!("[{}]", reg),
-            Self::DoubleReg(first, second, _) => format!("[{} + {}]", first, second),
+            Self::SingleReg(reg) => format!("[{}]", reg),
+            Self::DoubleReg(first, second) => format!("[{} + {}]", first, second),
         };
         write!(f, "{}", s)
     }
@@ -306,8 +286,8 @@ impl EffectiveAddress {
         let mut s = String::new();
         match self {
             Self::DirectAddress => todo!(),
-            Self::SingleReg(reg, _) => s.push_str(&format!("[{}]", reg)),
-            Self::DoubleReg(first, second, _) => {
+            Self::SingleReg(reg) => s.push_str(&format!("[{}]", reg)),
+            Self::DoubleReg(first, second) => {
                 s.push_str(&format!("[{} + {}", first, second));
                 if disp > 0 {
                     s.push_str(&format!(" + {}", disp));
@@ -329,7 +309,6 @@ struct Statement {
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let opcode = self.opcode.to_string();
-
         write!(f, "{} {}, {}", opcode, self.destination, self.source)
     }
 }
