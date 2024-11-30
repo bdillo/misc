@@ -46,6 +46,7 @@ enum Opcode {
     MovImmediateToRegister(IsWord, Register),
     AddRegMemWithRegToEither(DestinationIsReg, IsWord),
     AddImmediateToRegOrMem(IsSigned, IsWord),
+    AddImmediateToAccumulator(IsWord),
 }
 
 impl TryFrom<u8> for Opcode {
@@ -55,7 +56,8 @@ impl TryFrom<u8> for Opcode {
         match value {
             // mov register/memory to/from register
             value if (value & 0b11111100) == 0b10001000 => {
-                let (direction, is_word) = parse_destination_word(value);
+                let direction = ((value & 0b10) != 0) as DestinationIsReg;
+                let is_word = ((value & 0b1) != 0) as IsWord;
                 Ok(Self::MovRegisterMemoryToFromRegister(direction, is_word))
             }
             // mov immediate to register
@@ -66,7 +68,8 @@ impl TryFrom<u8> for Opcode {
             }
             // add reg/memory with register to either
             value if (value & 0b11111100) == 0b0 => {
-                let (direction, is_word) = parse_destination_word(value);
+                let direction = ((value & 0b10) != 0) as DestinationIsReg;
+                let is_word = ((value & 0b1) != 0) as IsWord;
                 Ok(Self::AddRegMemWithRegToEither(direction, is_word))
             }
             // add immediate to register/memory
@@ -75,17 +78,14 @@ impl TryFrom<u8> for Opcode {
                 let is_word = ((value & 0b1) != 0) as IsWord;
                 Ok(Self::AddImmediateToRegOrMem(is_signed, is_word))
             }
+            // add immediate to accumulator
+            value if (value & 0b11111110) == 0b00000100 => {
+                let is_word = ((value & 0b1) != 0) as IsWord;
+                Ok(Self::AddImmediateToAccumulator(is_word))
+            }
             _ => Err(DissassemblerError::InvalidOpcode(value)),
         }
     }
-}
-
-/// Parses the D and W fields we see in some opcodes where 0bxxxxxxDW
-fn parse_destination_word(value: u8) -> (DestinationIsReg, IsWord) {
-    let direction = ((value & 0b10) != 0) as DestinationIsReg;
-    let is_word = ((value & 0b1) != 0) as IsWord;
-
-    (direction, is_word)
 }
 
 impl fmt::Display for Opcode {
@@ -98,8 +98,21 @@ impl fmt::Display for Opcode {
                 Self::MovImmediateToRegister(_, _) => "mov",
                 Self::AddRegMemWithRegToEither(_, _) => "add",
                 Self::AddImmediateToRegOrMem(_, _) => "add",
+                Self::AddImmediateToAccumulator(_) => "add",
             }
         )
+    }
+}
+
+impl Opcode {
+    fn to_string_with_w(&self, is_word: IsWord) -> String {
+        let mut s = self.to_string();
+        if is_word {
+            s.push_str(" word");
+        } else {
+            s.push_str(" byte");
+        }
+        s
     }
 }
 
@@ -268,8 +281,10 @@ impl EffectiveAddress {
     fn from_with_mode(value: u8, mode: Mode) -> Result<Self> {
         let displacement = match mode {
             Mode::Memory(displacement) => displacement,
-            // TODO: is this right? not sure if we would ever have register mode here
-            Mode::Register => Displacement::None,
+            Mode::Register => {
+                // TODO: make error
+                panic!("can't have register mode with effective address calculation!")
+            }
         };
 
         let masked = value & 0b00000111;
@@ -305,15 +320,21 @@ impl fmt::Display for EffectiveAddress {
 }
 
 impl EffectiveAddress {
-    fn to_string_with_displacement(&self, disp: u16) -> String {
+    fn to_string_with_displacement(&self, disp: Option<u16>) -> String {
         let mut s = String::new();
         match self {
             Self::DirectAddress => todo!(),
-            Self::SingleReg(reg) => s.push_str(&format!("[{}]", reg)),
+            Self::SingleReg(reg) => {
+                s.push_str(&format!("[{}", reg));
+                if let Some(disp_val) = disp {
+                    s.push_str(&format!(" + {}", disp_val));
+                }
+                s.push(']');
+            }
             Self::DoubleReg(first, second) => {
                 s.push_str(&format!("[{} + {}", first, second));
-                if disp > 0 {
-                    s.push_str(&format!(" + {}", disp));
+                if let Some(disp_val) = disp {
+                    s.push_str(&format!(" + {}", disp_val));
                 }
                 s.push(']');
             }
@@ -349,7 +370,7 @@ fn parse_mod_reg_rm(value: u8, is_word: IsWord) -> Result<(Mode, Register, RmFie
 
 #[derive(Debug, PartialEq, Eq)]
 struct Statement {
-    opcode: Opcode,
+    opcode: String,
     destination: String,
     source: String,
 }
@@ -406,29 +427,33 @@ impl Disassembler {
         Ok(low + high)
     }
 
+    fn read_displacement(&mut self, disp: Displacement) -> Result<Option<u16>> {
+        Ok(match disp {
+            Displacement::None => None,
+            Displacement::Byte => Some(self.read_next()?.unwrap() as u16),
+            Displacement::Word => Some(self.read_word()?),
+        })
+    }
+
     fn decode_next_op(&mut self) -> Result<Option<Statement>> {
         let next = self.read_next()?;
 
         match next {
             Some(next) => {
                 let opcode = Opcode::try_from(next)?;
+                debug!("{:?}", opcode);
 
                 let statement = match opcode {
-                    // TODO: handle disp-lo,high
                     Opcode::MovRegisterMemoryToFromRegister(destination_is_reg, is_word) => {
                         let next = self.read_next()?.unwrap();
 
-                        let (mode, register, rm) = parse_mod_reg_rm(next, is_word)?;
+                        let (_mode, register, rm) = parse_mod_reg_rm(next, is_word)?;
 
                         let mut src = register.to_string();
 
                         let mut dest = match rm {
                             RmField::EffectiveAddressCalculation(effective_addr, disp) => {
-                                let disp_val = match disp {
-                                    Displacement::None => 0,
-                                    Displacement::Byte => self.read_next()?.unwrap() as u16,
-                                    Displacement::Word => self.read_word()?,
-                                };
+                                let disp_val = self.read_displacement(disp)?;
                                 effective_addr.to_string_with_displacement(disp_val)
                             }
                             RmField::Register(rm_reg) => rm_reg.to_string(),
@@ -439,7 +464,7 @@ impl Disassembler {
                         }
 
                         Statement {
-                            opcode,
+                            opcode: opcode.to_string(),
                             destination: dest,
                             source: src,
                         }
@@ -452,7 +477,7 @@ impl Disassembler {
                         };
 
                         Statement {
-                            opcode,
+                            opcode: opcode.to_string(),
                             destination: reg.to_string(),
                             source: data.to_string(),
                         }
@@ -466,11 +491,7 @@ impl Disassembler {
 
                         let mut dest = match rm {
                             RmField::EffectiveAddressCalculation(effective_addr, disp) => {
-                                let disp_val = match disp {
-                                    Displacement::None => 0,
-                                    Displacement::Byte => self.read_next()?.unwrap() as u16,
-                                    Displacement::Word => self.read_word()?,
-                                };
+                                let disp_val = self.read_displacement(disp)?;
                                 effective_addr.to_string_with_displacement(disp_val)
                             }
                             RmField::Register(rm_reg) => rm_reg.to_string(),
@@ -481,36 +502,45 @@ impl Disassembler {
                         }
 
                         Statement {
-                            opcode,
+                            opcode: opcode.to_string(),
                             destination: dest,
                             source: src,
                         }
                     }
                     Opcode::AddImmediateToRegOrMem(is_signed, is_word) => {
                         let next = self.read_next()?.unwrap();
-                        let (mode, _, rm) = parse_mod_reg_rm(next, is_word)?;
-
-                        let data = match mode {
-                            // TODO: i don't think we'll have memory mode here ever since it's immediate
-                            Mode::Memory(disp) => todo!(),
-                            Mode::Register => {
-                                if !is_signed && is_word {
-                                    // TODO: clean up this signed stuff - handle this better
-                                    self.read_word()? as i16
-                                } else {
-                                    self.read_next()?.unwrap() as i16
-                                }
-                            }
-                        };
+                        let (_mode, _, rm) = parse_mod_reg_rm(next, is_word)?;
 
                         let dest = match rm {
-                            RmField::EffectiveAddressCalculation(_, _) => todo!(),
+                            RmField::EffectiveAddressCalculation(effective_addr, disp) => {
+                                let disp_val = self.read_displacement(disp)?;
+                                effective_addr.to_string_with_displacement(disp_val)
+                            }
                             RmField::Register(reg) => reg.to_string(),
                         };
 
+                        let data = if !is_signed && is_word {
+                            self.read_word()?
+                        } else {
+                            self.read_next()?.unwrap() as u16
+                        };
+
                         Statement {
-                            opcode,
+                            opcode: opcode.to_string_with_w(is_word),
                             destination: dest,
+                            source: data.to_string(),
+                        }
+                    }
+                    Opcode::AddImmediateToAccumulator(is_word) => {
+                        let (reg, data) = if is_word {
+                            (Register::AX, self.read_word()?)
+                        } else {
+                            (Register::AL, self.read_next()?.unwrap() as u16)
+                        };
+
+                        Statement {
+                            opcode: opcode.to_string(),
+                            destination: reg.to_string(),
                             source: data.to_string(),
                         }
                     }
@@ -539,7 +569,7 @@ mod test {
         let statement = d.decode_next_op()?.unwrap();
 
         let expected = Statement {
-            opcode: Opcode::MovRegisterMemoryToFromRegister(false, true),
+            opcode: Opcode::MovRegisterMemoryToFromRegister(false, true).to_string(),
             destination: Register::CX.to_string(),
             source: Register::BX.to_string(),
         };
