@@ -39,7 +39,7 @@ impl TryFrom<u8> for Mode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum EffectiveAddress {
     DirectAddress,
     SingleReg(Register),
@@ -92,7 +92,12 @@ impl EffectiveAddress {
     pub fn to_string_with_displacement(&self, disp: Option<u16>) -> String {
         let mut s = String::new();
         match self {
-            Self::DirectAddress => todo!(),
+            Self::DirectAddress => {
+                s.push_str(&format!(
+                    "[{}]",
+                    disp.expect("DirectAddress should always have disp!")
+                ));
+            }
             Self::SingleReg(reg) => {
                 s.push_str(&format!("[{}", reg));
                 if let Some(disp_val) = disp {
@@ -135,8 +140,15 @@ pub fn parse_mod_rm(value: u8, is_word: IsWord) -> Result<(Mode, Rm)> {
     let mode = Mode::try_from(value)?;
 
     let rm = match mode {
-        Mode::Memory(disp) => {
-            Rm::EffectiveAddressCalculation(EffectiveAddress::from_with_mode(value, mode)?, disp)
+        Mode::Memory(mut disp) => {
+            let effective_addr = EffectiveAddress::from_with_mode(value, mode)?;
+
+            // if mode == 00 (memory, no disp) and rm == 110 (direct address), add 16 bit disp
+            if disp == Displacement::None && effective_addr == EffectiveAddress::DirectAddress {
+                disp = Displacement::Word
+            }
+
+            Rm::EffectiveAddressCalculation(effective_addr, disp)
         }
         Mode::Register => Rm::Register(Register::try_from_with_w(value, is_word)?),
     };

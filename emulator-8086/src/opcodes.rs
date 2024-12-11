@@ -7,6 +7,7 @@ pub enum OpcodeMnemonic {
     Mov,
     Add,
     Sub,
+    Cmp,
     NeedsNextByte,
 }
 
@@ -19,6 +20,7 @@ impl fmt::Display for OpcodeMnemonic {
                 Self::Mov => "mov",
                 Self::Add => "add",
                 Self::Sub => "sub",
+                Self::Cmp => "cmp",
                 Self::NeedsNextByte => todo!(),
             }
         )
@@ -41,6 +43,10 @@ impl OpcodeMnemonic {
                 0b10000000..=0b10000011 => OpcodeMnemonic::Sub,
                 _ => panic!("unsupported vals {:b} {:b}", opcode_val, mod_rm),
             },
+            0b111 => match opcode_val {
+                0b10000000..=0b10000011 => OpcodeMnemonic::Cmp,
+                _ => panic!("unsupported vals {:b} {:b}", opcode_val, mod_rm),
+            },
             _ => panic!("unsupported vals {:b} {:b}", opcode_val, mod_rm),
         }
     }
@@ -53,25 +59,6 @@ pub enum NextFieldType {
     Data,
     Addr,
     None,
-}
-
-#[derive(Debug)]
-pub enum AmbiguousOperandEncoding {
-    Byte,
-    Word,
-}
-
-impl fmt::Display for AmbiguousOperandEncoding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                AmbiguousOperandEncoding::Byte => "byte",
-                AmbiguousOperandEncoding::Word => "word",
-            }
-        )
-    }
 }
 
 #[derive(Debug)]
@@ -140,7 +127,7 @@ impl TryFrom<u8> for OpcodeContext {
                 reg: None,
                 has_data: false,
             },
-            // add, adc immediate to register/memory
+            // add, adc, cmp immediate to register/memory
             0b10000000..=0b10000011 => OpcodeContext {
                 first_byte_raw: value,
                 mnemonic: OpcodeMnemonic::NeedsNextByte,
@@ -192,6 +179,17 @@ impl TryFrom<u8> for OpcodeContext {
                     has_data: true,
                 }
             }
+            // cmp, register/memory and register
+            0b00111000..=0b00111011 => OpcodeContext {
+                first_byte_raw: value,
+                mnemonic: OpcodeMnemonic::Cmp,
+                next_field: NextFieldType::ModRegRm,
+                d: Some(extract_second_lsb(value)),
+                w: Some(extract_lsb(value)),
+                s: None,
+                reg: None,
+                has_data: false,
+            },
             _ => return Err(DissassemblerError::InvalidOpcode(value)),
         })
     }
@@ -230,4 +228,12 @@ impl OpcodeContext {
         let mnemonic = OpcodeMnemonic::with_mod_rm(self.first_byte_raw, next_byte);
         self.mnemonic = mnemonic;
     }
+}
+
+fn extract_lsb(value: u8) -> bool {
+    (value & 0b1) != 0
+}
+
+fn extract_second_lsb(value: u8) -> bool {
+    (value & 0b10) != 0
 }

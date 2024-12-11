@@ -132,7 +132,7 @@ impl Disassembler {
         Ok(val)
     }
 
-    /// wtf is this
+    /// Sometimes we need to read more bytes depending on our effective address calculation, so put this here
     fn rm_to_string(&mut self, rm: Rm) -> Result<String> {
         Ok(match rm {
             Rm::EffectiveAddressCalculation(effective_addr, disp) => {
@@ -209,7 +209,7 @@ impl Disassembler {
 
                         // handle ambiguous size encoding here - this might need to be cleaned up
                         if let Mode::Memory(_) = mode {
-                            dest.insert_str(0, if w { "byte " } else { "word " });
+                            dest.insert_str(0, if w { "word " } else { "byte " });
                         }
 
                         // if we have an s field, the size of data depends on s and w (2 bytes if sw == 01)
