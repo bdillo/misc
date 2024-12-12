@@ -190,6 +190,21 @@ impl TryFrom<u8> for OpcodeContext {
                 reg: None,
                 has_data: false,
             },
+            // cmp, immediate with accumulator
+            0b00111100..=0b00111101 => {
+                let w_val = extract_lsb(value);
+                let reg = Register::accumulator_from_w(w_val);
+                OpcodeContext {
+                    first_byte_raw: value,
+                    mnemonic: OpcodeMnemonic::Cmp,
+                    next_field: NextFieldType::Data,
+                    d: None,
+                    w: Some(w_val),
+                    s: None,
+                    reg: Some(reg),
+                    has_data: true,
+                }
+            }
             _ => return Err(DissassemblerError::InvalidOpcode(value)),
         })
     }
