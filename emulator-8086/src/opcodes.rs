@@ -1,6 +1,6 @@
 use core::{fmt, panic};
 
-use crate::{reg::Register, DestinationIsReg, DissassemblerError, IsWord};
+use crate::{jump_ipinc8_op, reg::Register, DestinationIsReg, DissassemblerError, IsWord};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpcodeMnemonic {
@@ -8,6 +8,26 @@ pub enum OpcodeMnemonic {
     Add,
     Sub,
     Cmp,
+    Je,
+    Jl,
+    Jle,
+    Jb,
+    Jbe,
+    Jp,
+    Jo,
+    Js,
+    Jne,
+    Jnl,
+    Jg,
+    Jnb,
+    Jnbe,
+    Jnp,
+    Jno,
+    Jns,
+    Loop,
+    Loopz,
+    Loopnz,
+    Jcxz,
     NeedsNextByte,
 }
 
@@ -21,6 +41,26 @@ impl fmt::Display for OpcodeMnemonic {
                 Self::Add => "add",
                 Self::Sub => "sub",
                 Self::Cmp => "cmp",
+                Self::Je => "je",
+                Self::Jl => "jl",
+                Self::Jle => "jle",
+                Self::Jb => "jb",
+                Self::Jbe => "jbe",
+                Self::Jp => "jp",
+                Self::Jo => "jo",
+                Self::Js => "js",
+                Self::Jne => "jne",
+                Self::Jnl => "jnl",
+                Self::Jg => "jg",
+                Self::Jnb => "jnb",
+                Self::Jnbe => "jnbe",
+                Self::Jnp => "jnp",
+                Self::Jno => "jno",
+                Self::Jns => "jns",
+                Self::Loop => "loop",
+                Self::Loopz => "loopz",
+                Self::Loopnz => "loopnz",
+                Self::Jcxz => "jcxz",
                 Self::NeedsNextByte => todo!(),
             }
         )
@@ -58,6 +98,7 @@ pub enum NextFieldType {
     ModOpcodeContRm,
     Data,
     Addr,
+    IpInc8,
     None,
 }
 
@@ -205,6 +246,46 @@ impl TryFrom<u8> for OpcodeContext {
                     has_data: true,
                 }
             }
+            // je/jz
+            0b01110100 => jump_ipinc8_op!(OpcodeMnemonic::Je, value),
+            // jl/jnge
+            0b01111100 => jump_ipinc8_op!(OpcodeMnemonic::Jl, value),
+            // jle/jng
+            0b01111110 => jump_ipinc8_op!(OpcodeMnemonic::Jle, value),
+            // jb/jnae
+            0b01110010 => jump_ipinc8_op!(OpcodeMnemonic::Jb, value),
+            // jbe/jna
+            0b01110110 => jump_ipinc8_op!(OpcodeMnemonic::Jbe, value),
+            // jp/jpe
+            0b01111010 => jump_ipinc8_op!(OpcodeMnemonic::Jp, value),
+            // jo
+            0b01110000 => jump_ipinc8_op!(OpcodeMnemonic::Jo, value),
+            // js
+            0b01111000 => jump_ipinc8_op!(OpcodeMnemonic::Js, value),
+            // jne/jnz
+            0b01110101 => jump_ipinc8_op!(OpcodeMnemonic::Jne, value),
+            // jnl/jge
+            0b01111101 => jump_ipinc8_op!(OpcodeMnemonic::Jne, value),
+            // jnle/jg
+            0b01111111 => jump_ipinc8_op!(OpcodeMnemonic::Jg, value),
+            // jnb/jae
+            0b01110011 => jump_ipinc8_op!(OpcodeMnemonic::Jnb, value),
+            // jnbe/ja
+            0b01110111 => jump_ipinc8_op!(OpcodeMnemonic::Jnbe, value),
+            // jnp/jpo
+            0b01111011 => jump_ipinc8_op!(OpcodeMnemonic::Jnp, value),
+            // jno
+            0b01110001 => jump_ipinc8_op!(OpcodeMnemonic::Jno, value),
+            // jns
+            0b01111001 => jump_ipinc8_op!(OpcodeMnemonic::Jns, value),
+            // loop
+            0b11100010 => jump_ipinc8_op!(OpcodeMnemonic::Loop, value),
+            // loopz
+            0b11100001 => jump_ipinc8_op!(OpcodeMnemonic::Loopz, value),
+            // loopnz
+            0b11100000 => jump_ipinc8_op!(OpcodeMnemonic::Loopnz, value),
+            // jcxz
+            0b11100011 => jump_ipinc8_op!(OpcodeMnemonic::Jcxz, value),
             _ => return Err(DissassemblerError::InvalidOpcode(value)),
         })
     }

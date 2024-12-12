@@ -1,3 +1,4 @@
+pub mod macros;
 pub mod modrm;
 pub mod opcodes;
 pub mod reg;
@@ -246,6 +247,16 @@ impl Disassembler {
                             opcode: *opcode_ctx.mnemonic(),
                             destination: reg.to_string(),
                             source: data.to_string(),
+                        }))
+                    }
+                    NextFieldType::IpInc8 => {
+                        let jump_offset = self.read_expecting()? as i8;
+
+                        // TODO: fix up AsmStatement for formatting instructions that don't have src/dest, this is just a hack for now
+                        Ok(Some(AsmStatement {
+                            opcode: *opcode_ctx.mnemonic(),
+                            destination: jump_offset.to_string(),
+                            source: String::new(),
                         }))
                     }
                     _ => todo!(),
