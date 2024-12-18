@@ -1,22 +1,42 @@
 use std::fmt;
 
-use crate::{opcodes::OpcodeMnemonic, reg::Register, DissassemblerError, IsWord};
+use crate::{reg::Register, DissassemblerError, IsWord};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Displacement {
-    /// No displacement
+pub enum DisplacementLen {
     None,
-    /// 8 bit displacement
     Byte,
-    /// 16 bit displacement
     Word,
+}
+
+// TODO: is this needed?
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplacementValue {
+    None,
+    Byte(u8),
+    Word(u16),
+}
+
+impl fmt::Display for DisplacementValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                // should this be 0 here?
+                DisplacementValue::None => "0".to_owned(),
+                DisplacementValue::Byte(b) => b.to_string(),
+                DisplacementValue::Word(w) => w.to_string(),
+            }
+        )
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
-    Memory(Displacement),
+    Memory(DisplacementLen),
     Register,
 }
 
@@ -28,9 +48,9 @@ impl TryFrom<u8> for Mode {
         let masked = masked >> 6;
 
         let mode = match masked {
-            0b00 => Self::Memory(Displacement::None),
-            0b01 => Self::Memory(Displacement::Byte),
-            0b10 => Self::Memory(Displacement::Word),
+            0b00 => Self::Memory(DisplacementLen::None),
+            0b01 => Self::Memory(DisplacementLen::Byte),
+            0b10 => Self::Memory(DisplacementLen::Word),
             0b11 => Self::Register,
             _ => return Err(DissassemblerError::InvalidMode),
         };
@@ -65,7 +85,7 @@ impl EffectiveAddress {
             0b100 => Self::SingleReg(Register::SI),
             0b101 => Self::SingleReg(Register::DI),
             0b110 => {
-                if displacement == Displacement::None {
+                if displacement == DisplacementLen::None {
                     Self::DirectAddress
                 } else {
                     Self::SingleReg(Register::BP)
@@ -89,26 +109,27 @@ impl fmt::Display for EffectiveAddress {
 }
 
 impl EffectiveAddress {
-    pub fn to_string_with_displacement(&self, disp: Option<u16>) -> String {
+    pub fn to_string_with_displacement(&self, disp: &DisplacementValue) -> String {
         let mut s = String::new();
         match self {
             Self::DirectAddress => {
-                s.push_str(&format!(
-                    "[{}]",
-                    disp.expect("DirectAddress should always have disp!")
-                ));
+                s.push_str(&format!("[{}]", disp.to_string()));
             }
             Self::SingleReg(reg) => {
                 s.push_str(&format!("[{}", reg));
-                if let Some(disp_val) = disp {
-                    s.push_str(&format!(" + {}", disp_val));
+                match disp {
+                    DisplacementValue::None => (),
+                    DisplacementValue::Byte(v) => s.push_str(&format!(" + {}", v)),
+                    DisplacementValue::Word(v) => s.push_str(&format!(" + {}", v)),
                 }
                 s.push(']');
             }
             Self::DoubleReg(first, second) => {
                 s.push_str(&format!("[{} + {}", first, second));
-                if let Some(disp_val) = disp {
-                    s.push_str(&format!(" + {}", disp_val));
+                match disp {
+                    DisplacementValue::None => (),
+                    DisplacementValue::Byte(v) => s.push_str(&format!(" + {}", v)),
+                    DisplacementValue::Word(v) => s.push_str(&format!(" + {}", v)),
                 }
                 s.push(']');
             }
@@ -119,7 +140,7 @@ impl EffectiveAddress {
 
 #[derive(Debug)]
 pub enum Rm {
-    EffectiveAddressCalculation(EffectiveAddress, Displacement),
+    EffectiveAddressCalculation(EffectiveAddress, DisplacementLen),
     Register(Register),
 }
 
@@ -144,8 +165,8 @@ pub fn parse_mod_rm(value: u8, is_word: IsWord) -> Result<(Mode, Rm)> {
             let effective_addr = EffectiveAddress::from_with_mode(value, mode)?;
 
             // if mode == 00 (memory, no disp) and rm == 110 (direct address), add 16 bit disp
-            if disp == Displacement::None && effective_addr == EffectiveAddress::DirectAddress {
-                disp = Displacement::Word
+            if disp == DisplacementLen::None && effective_addr == EffectiveAddress::DirectAddress {
+                disp = DisplacementLen::Word
             }
 
             Rm::EffectiveAddressCalculation(effective_addr, disp)

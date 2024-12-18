@@ -31,6 +31,7 @@ pub enum OpcodeMnemonic {
     NeedsNextByte,
 }
 
+// TODO: maybe move this to as_str impl, then reference that here. Then I don't have to allocate when we need a stringy representation of ops
 impl fmt::Display for OpcodeMnemonic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -104,6 +105,7 @@ pub enum NextFieldType {
 
 #[derive(Debug)]
 pub struct OpcodeContext {
+    // TODO: think I can remove this first_byte_raw
     first_byte_raw: u8,
     mnemonic: OpcodeMnemonic,
     next_field: NextFieldType,
@@ -111,7 +113,6 @@ pub struct OpcodeContext {
     w: Option<IsWord>,
     s: Option<bool>,
     reg: Option<Register>,
-    has_data: bool,
 }
 
 impl TryFrom<u8> for OpcodeContext {
@@ -128,7 +129,6 @@ impl TryFrom<u8> for OpcodeContext {
                 w: Some((value & 0b1) != 0),
                 s: None,
                 reg: None,
-                has_data: false,
             },
             // mov immediate to register/memory
             0b11000110..=0b11000111 => OpcodeContext {
@@ -140,7 +140,6 @@ impl TryFrom<u8> for OpcodeContext {
                 w: Some((value & 0b1) != 0),
                 s: None,
                 reg: None,
-                has_data: true,
             },
             // mov immediate to register
             0b10110000..=0b10111111 => {
@@ -154,7 +153,6 @@ impl TryFrom<u8> for OpcodeContext {
                     w: Some(w),
                     s: None,
                     reg: Some(Register::try_from_with_w(value, w)?),
-                    has_data: true,
                 }
             }
             // add reg/memory with register to either
@@ -166,7 +164,6 @@ impl TryFrom<u8> for OpcodeContext {
                 w: Some((value & 0b1) != 0),
                 s: None,
                 reg: None,
-                has_data: false,
             },
             // add, adc, cmp immediate to register/memory
             0b10000000..=0b10000011 => OpcodeContext {
@@ -177,7 +174,6 @@ impl TryFrom<u8> for OpcodeContext {
                 w: Some((value & 0b1) != 0),
                 s: Some((value & 0b10) != 0),
                 reg: None,
-                has_data: true,
             },
             // add, immediate to accumulator
             0b00000100..=0b00000101 => {
@@ -191,7 +187,6 @@ impl TryFrom<u8> for OpcodeContext {
                     w: Some(w_val),
                     s: None,
                     reg: Some(reg),
-                    has_data: true,
                 }
             }
             // sub, reg/memory and register to either
@@ -203,7 +198,6 @@ impl TryFrom<u8> for OpcodeContext {
                 w: Some((value & 0b1) != 0),
                 s: None,
                 reg: None,
-                has_data: false,
             },
             // sub, immediate from accumulator
             0b00101100..=0b00101101 => {
@@ -217,7 +211,6 @@ impl TryFrom<u8> for OpcodeContext {
                     w: Some(w_val),
                     s: None,
                     reg: Some(reg),
-                    has_data: true,
                 }
             }
             // cmp, register/memory and register
@@ -229,7 +222,6 @@ impl TryFrom<u8> for OpcodeContext {
                 w: Some(extract_lsb(value)),
                 s: None,
                 reg: None,
-                has_data: false,
             },
             // cmp, immediate with accumulator
             0b00111100..=0b00111101 => {
@@ -243,7 +235,6 @@ impl TryFrom<u8> for OpcodeContext {
                     w: Some(w_val),
                     s: None,
                     reg: Some(reg),
-                    has_data: true,
                 }
             }
             // je/jz
@@ -316,16 +307,13 @@ impl OpcodeContext {
         &self.reg
     }
 
-    pub fn has_data(&self) -> bool {
-        self.has_data
-    }
-
     pub fn with_next_byte(&mut self, next_byte: u8) {
         let mnemonic = OpcodeMnemonic::with_mod_rm(self.first_byte_raw, next_byte);
         self.mnemonic = mnemonic;
     }
 }
 
+// TODO: are these really worth it? maybe just make a macro...
 fn extract_lsb(value: u8) -> bool {
     (value & 0b1) != 0
 }

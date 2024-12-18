@@ -10,7 +10,6 @@ macro_rules! jump_ipinc8_op {
             w: None,
             s: None,
             reg: None,
-            has_data: false,
         }
     };
 }

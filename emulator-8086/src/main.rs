@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use emulator_8086::Disassembler;
+use emulator_8086::disassembler::Disassembler;
 use log::error;
 
 #[derive(Debug, Parser)]
